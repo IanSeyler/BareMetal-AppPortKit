@@ -33,11 +33,15 @@ one.
 ## Missing common syscalls
 
 Not implemented (all fall through to `-ENOSYS`):
-- `clock_gettime`/`gettimeofday`/`nanosleep`/`clock_nanosleep` — no
-  wall-clock time exposed to programs yet, only `b_system(TIMECOUNTER)`
-  (nanoseconds since boot) used internally by the heap/TLS/lwIP code.
-  Any program that calls `time()`, benchmarks itself, or does
-  `sleep()` will fail or misbehave.
+- `nanosleep`/`clock_nanosleep` — no way to block for a relative
+  duration; `sleep()`/`usleep()` will fail or misbehave.
+- `clock_gettime`/`gettimeofday`/`time()` only support
+  `CLOCK_REALTIME`/`CLOCK_REALTIME_COARSE`, backed by
+  `b_system(WALLCLOCK)` (seconds since the Unix epoch, recorded at
+  boot; `tv_nsec` is always 0 -- no sub-second component is wired up).
+  `CLOCK_MONOTONIC` and other clock ids return `-EINVAL`; they would
+  need `b_system(TIMECOUNTER)` (nanoseconds since boot, already used
+  internally by the heap/TLS/lwIP code) wired up as a separate case.
 - `getrandom` — nothing backs `/dev/urandom`-equivalent randomness for
   application code (musl's own internal entropy needs, e.g. the stack
   canary and mallocng's hardening secret, are seeded via `crt0.c`'s

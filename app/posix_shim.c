@@ -19,6 +19,7 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <time.h>
 
 #include "libBareMetal.h"
 #include "posix_shim.h"
@@ -349,6 +350,32 @@ static long sys_exit(long code)
 }
 
 // -----------------------------------------------------------------------
+// Time
+//
+// b_system(WALLCLOCK, 0, 0) returns seconds since the Unix epoch (the
+// value KVM recorded at boot); there is no sub-second component wired
+// up here, so tv_nsec is always 0. Only CLOCK_REALTIME is backed by
+// it -- CLOCK_MONOTONIC and friends would need TIMECOUNTER (see
+// OPENISSUES.md) and aren't implemented yet.
+// -----------------------------------------------------------------------
+
+static long sys_clock_gettime(long clk_id, struct timespec *ts)
+{
+	if (!ts)
+		return -EFAULT;
+
+	switch (clk_id) {
+	case CLOCK_REALTIME:
+	case CLOCK_REALTIME_COARSE:
+		ts->tv_sec = (time_t)b_system(WALLCLOCK, 0, 0);
+		ts->tv_nsec = 0;
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+// -----------------------------------------------------------------------
 // Dispatcher
 // -----------------------------------------------------------------------
 
@@ -382,6 +409,7 @@ long __bmos_syscall(long n, long a1, long a2, long a3, long a4, long a5, long a6
 	case SYS_set_tid_address:                     return sys_set_tid_address(a1);
 	case SYS_exit:                                  return sys_exit(a1);
 	case SYS_exit_group:                             return sys_exit(a1);
+	case SYS_clock_gettime:                          return sys_clock_gettime(a1, (struct timespec *)a2);
 
 	// Networking -- IPv4 TCP only, see net_shim.c.
 	case SYS_socket:      return sys_socket(a1, a2, a3);

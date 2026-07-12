@@ -77,5 +77,5 @@ ld -T c.ld -o webc.app crt0.o posix_shim.o bmfs.o net_glue.o net_shim.o \
 ld -T c.ld -o timetest.app crt0.o posix_shim.o bmfs.o net_glue.o net_shim.o \
 	libBareMetal.o timetest.o $LWIP_OBJS "$MUSL_LIB"
 
-cp helloc.app webc.app ../
+cp helloc.app webc.app timetest.app ../
 cd ..

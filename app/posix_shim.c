@@ -354,9 +354,11 @@ static long sys_exit(long code)
 //
 // b_system(WALLCLOCK, 0, 0) returns seconds since the Unix epoch (the
 // value KVM recorded at boot); there is no sub-second component wired
-// up here, so tv_nsec is always 0. Only CLOCK_REALTIME is backed by
-// it -- CLOCK_MONOTONIC and friends would need TIMECOUNTER (see
-// OPENISSUES.md) and aren't implemented yet.
+// up here, so tv_nsec is always 0. CLOCK_REALTIME is backed by that.
+//
+// b_system(TIMECOUNTER, 0, 0) returns nanoseconds since boot (same
+// counter net_glue.c's sys_now() divides down to milliseconds), which
+// backs CLOCK_MONOTONIC and friends (CLOCK_MONOTONIC_RAW/_COARSE).
 // -----------------------------------------------------------------------
 
 static long sys_clock_gettime(long clk_id, struct timespec *ts)
@@ -370,6 +372,14 @@ static long sys_clock_gettime(long clk_id, struct timespec *ts)
 		ts->tv_sec = (time_t)b_system(WALLCLOCK, 0, 0);
 		ts->tv_nsec = 0;
 		return 0;
+	case CLOCK_MONOTONIC:
+	case CLOCK_MONOTONIC_RAW:
+	case CLOCK_MONOTONIC_COARSE: {
+		unsigned long long ns = b_system(TIMECOUNTER, 0, 0);
+		ts->tv_sec = (time_t)(ns / 1000000000ULL);
+		ts->tv_nsec = (long)(ns % 1000000000ULL);
+		return 0;
+	}
 	default:
 		return -EINVAL;
 	}

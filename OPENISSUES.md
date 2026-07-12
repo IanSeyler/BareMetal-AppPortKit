@@ -35,13 +35,14 @@ one.
 Not implemented (all fall through to `-ENOSYS`):
 - `nanosleep`/`clock_nanosleep` — no way to block for a relative
   duration; `sleep()`/`usleep()` will fail or misbehave.
-- `clock_gettime`/`gettimeofday`/`time()` only support
-  `CLOCK_REALTIME`/`CLOCK_REALTIME_COARSE`, backed by
+- `gettimeofday`/`time()` only support wall-clock time, backed by
   `b_system(WALLCLOCK)` (seconds since the Unix epoch, recorded at
-  boot; `tv_nsec` is always 0 -- no sub-second component is wired up).
-  `CLOCK_MONOTONIC` and other clock ids return `-EINVAL`; they would
-  need `b_system(TIMECOUNTER)` (nanoseconds since boot, already used
-  internally by the heap/TLS/lwIP code) wired up as a separate case.
+  boot; sub-second component is always 0 -- no sub-second component is
+  wired up for it). `clock_gettime` additionally supports
+  `CLOCK_MONOTONIC`/`CLOCK_MONOTONIC_RAW`/`CLOCK_MONOTONIC_COARSE`,
+  backed by `b_system(TIMECOUNTER)` (nanoseconds since boot, already
+  used internally by the heap/TLS/lwIP code). Other clock ids (e.g.
+  `CLOCK_PROCESS_CPUTIME_ID`) still return `-EINVAL`.
 - `getrandom` — nothing backs `/dev/urandom`-equivalent randomness for
   application code (musl's own internal entropy needs, e.g. the stack
   canary and mallocng's hardening secret, are seeded via `crt0.c`'s

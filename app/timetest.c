@@ -19,8 +19,8 @@ int main(void)
 	strftime(buf, sizeof(buf), "%A, %B %d %Y %H:%M:%S UTC", &tm);
 	printf("%s\n", buf);
 
-	struct timespec bad;
-	int r = clock_gettime(CLOCK_MONOTONIC, &bad);
-	printf("CLOCK_MONOTONIC result=%d\n", r);
+	struct timespec mono;
+	int r = clock_gettime(CLOCK_MONOTONIC, &mono);
+	printf("CLOCK_MONOTONIC result=%d sec=%ld nsec=%ld\n", r, (long)mono.tv_sec, (long)mono.tv_nsec);
 	return 0;
 }

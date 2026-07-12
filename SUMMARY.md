@@ -3,9 +3,11 @@
 What this covers: porting musl libc to the BareMetal exokernel (the
 `app/` build, previously just a hand-written "hello world" in C
 calling `libBareMetal.h` directly), then building a POSIX file I/O
-layer on top of it (BMFS), then TCP/IP networking (lwIP). Everything
-below was verified by actually booting the result in Firecracker and
-checking real output — not just "it compiled."
+layer on top of it (ext4, replacing an earlier custom BMFS-based
+layer), then TCP/IP networking (lwIP). Everything below was verified
+by actually booting the result in Firecracker and checking real
+output — not just "it compiled" — except the ext4 rewrite itself,
+verified on the host instead (see "Verification" below).
 
 See `OPENISSUES.md` for what's still missing/limited.
 
@@ -71,29 +73,44 @@ regardless of `brk()` — without it, large `malloc()`s would fail
 outright. `munmap()` is a no-op (documented limitation — no real
 paging to reclaim into).
 
-## BMFS file I/O (`bmfs.c`, `bmfs.h`)
+## ext4 file I/O (`ext4.c`, `ext4.h`)
 
 The kernel has no filesystem, only raw 4096-byte sector I/O
-(`b_nvs_read`/`b_nvs_write`). BMFS's on-disk format had no vendored
-spec in this repo, so it was reverse-engineered from `disk.img`'s raw
-bytes and `payload/BareMetal-Monitor/src/monitor.asm`'s loader code:
-sector 0 superblock (`"BMFS"` magic at byte 1024), sector 1 = 64×64-byte
-directory entries (name/start-block/reserved-blocks/size), file data
-in 2MiB-block units.
+(`b_nvs_read`/`b_nvs_write`), and originally this layer was BMFS (a
+small, custom, reverse-engineered format). It was replaced with a
+from-scratch minimal ext4 reader/writer so app-produced disk images
+are ordinary ext4, readable/writable with stock Linux tooling — at the
+cost of a much more involved on-disk format: superblock and block
+group descriptors, inode table records, extent trees mapping a file's
+logical blocks to physical ones, and directory entries.
 
-Implements `open`/`read`/`write`/`close`/`lseek`/`unlink`, plus
-path-based `stat()`. That last one took a wrong turn worth noting:
+This is not a general-purpose ext4 driver; it implements exactly the
+subset `posix_shim.c` needs: `open`/`read`/`write`/`close`/`lseek`/
+`unlink`, plus path-based `stat()`, against a single flat root
+directory, with real block/inode bitmap allocation so files can grow
+past their initial size (unlike BMFS's fixed 2MiB-per-file
+reservation). It requires filesystem images built with a constrained
+feature set — see the file-level comment in `ext4.c` for the exact
+`mkfs.ext4` invocation (4096-byte blocks so an ext4 block and a disk
+sector are the same unit, 256-byte inodes, `64bit`/`metadata_csum`/
+`meta_bg` disabled) — and caps extent trees at depth 1 (up to 4
+in-inode extents, or up to 4 index blocks of ~340 extents each). See
+OPENISSUES.md for the full list of what's deliberately not
+implemented (subdirectories, htree creation, directory listing,
+journal replay, checksums).
+
+`stat()`'s path was carried over unchanged from the BMFS-era work:
 x86_64 musl doesn't call `statx()` for a plain `stat()` — disassembling
 the actual compiled call site showed it takes a `SYS_stat`/`SYS_lstat`
 fast path (falling back to `SYS_newfstatat` only for non-default
 dirfd/flags), which needed matching musl's internal `struct kstat`
 layout, not the `statx` ABI initially assumed.
 
-Also fixed: `O_APPEND` originally only seeked to end-of-file once, at
-`open()` time. A subsequent `lseek()` on the same fd would then let a
-`write()` silently overwrite instead of appending. Fixed by forcing
-the write position to the current file size on every `write()` call
-when the fd has `O_APPEND` set.
+Also carried over: `O_APPEND` forces the write position to the
+current file size on every `write()` call (rather than seeking to
+end-of-file once, at `open()` time), so a subsequent `lseek()` on the
+same fd can't make a `write()` silently overwrite instead of
+appending.
 
 ## Networking (`net_glue.c`, `net_shim.c`, vendored `lwip-2.2.0/`)
 
@@ -126,20 +143,36 @@ output), not just compiling:
 - musl startup + `printf` — clean "Hello, World!" with no faults.
 - Heap — small (`brk`-backed) and 200KB (`mmap`-backed, crosses
   mallocng's threshold) allocations, both fully written/read back.
-- BMFS — read an existing on-disk file byte-for-byte; created, wrote,
-  closed, reopened, and read back a new file; independently
-  cross-checked the new file's size with the host-side `bmfs` tool.
-  `O_APPEND` fix verified with a deliberate
-  write→lseek(0)→write→lseek(0)→write sequence that would have
-  corrupted the file without the fix.
 - Networking — DHCP-bound a real address from the host's `dnsmasq`;
   guest TCP client connected out to a host `nc -l` listener (message
   received on the host side); host `nc` connected in to the guest's
   TCP server and got back the expected echoed reply.
 
+ext4 (`ext4.c`) replaced BMFS without a Firecracker boot available in
+this checkout, so it was instead verified on the host: `ext4.c` was
+compiled as-is against a small shim backing `b_nvs_read`/`b_nvs_write`
+with `pread`/`pwrite` on a loop file, then exercised against a real
+`mkfs.ext4`-produced image (built with the required feature flags —
+see `ext4.c`'s file-level comment) pre-seeded with a file via
+`debugfs`. Covered: reading a pre-existing file byte-for-byte;
+create/write/close/reopen/read-back; `stat()`/`fstatat()`; a ~20MiB
+sequential file; `O_APPEND` ignoring an intervening `lseek()`;
+`O_TRUNC`; a sparse write (seek past EOF, write, confirm the gap
+reads back as zero); `unlink()` followed by ENOENT and by
+recreation; 500 files spanning multiple directory blocks; and,
+by interleaving single-block writes across two files so each file's
+own blocks land non-contiguously, forcing its extent tree through the
+depth-0→depth-1 promotion and then a second leaf block. The resulting
+image was independently checked with real `e2fsprogs` tooling —
+`e2fsck -f` reported zero errors, and `debugfs`'s own extent-tree
+parser and file dumps agreed byte-for-byte with what the driver wrote
+(confirming the extent tree, not just the data, is really ext4-
+compatible). A real Firecracker boot exercising this path (as the
+BMFS work above was) is still open — see OPENISSUES.md.
+
 ## Files
 
-New/vendored under `app/`: `posix_shim.{c,h}`, `bmfs.{c,h}`,
+New/vendored under `app/`: `posix_shim.{c,h}`, `ext4.{c,h}`,
 `net_glue.{c,h}`, `net_shim.{c,h}`, `lwip_port/` (port config),
 `musl-1.2.6/` and `lwip-2.2.0/` (vendored source, fetched via
 `scripts/get-musl.sh` / `scripts/get-lwip.sh`). Modified:

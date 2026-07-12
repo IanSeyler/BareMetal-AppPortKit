@@ -1,6 +1,6 @@
 # Open Issues
 
-Known gaps and limitations in the musl libc port (`app/`), BMFS file
+Known gaps and limitations in the musl libc port (`app/`), ext4 file
 I/O, and lwIP-based networking. Most of these are deliberate scope
 cuts made while getting each phase working end to end, not bugs —
 they're listed here so they're easy to find again when someone hits
@@ -48,14 +48,15 @@ Not implemented (all fall through to `-ENOSYS`):
   `fill_random()` using `rdrand`/`rdtsc`, but that path isn't exposed
   as a syscall).
 - `poll`/`select`/`epoll_*` — no way to multiplex across multiple fds
-  (stdin, a BMFS file, a socket) in one blocking call. Combined with
+  (stdin, an ext4 file, a socket) in one blocking call. Combined with
   every blocking socket/file op in this port already being a
   synchronous spin-loop internally, this means a program can't
   currently wait on "whichever of these fds is ready first."
 - `pipe`/`pipe2`/`dup`/`dup2`/`dup3` — no in-process fd duplication or
   pipes between fds.
 - `getcwd`/`chdir`/`mkdir`/`rmdir`/`chmod`/`chown`/`umask` — no
-  concept of a working directory or permissions (BMFS has neither).
+  concept of a working directory or permissions above the on-disk mode
+  bits (`ext4.c` only ever looks up paths in the root directory).
 
 ## Heap (`posix_shim.c`)
 
@@ -71,29 +72,46 @@ Not implemented (all fall through to `-ENOSYS`):
   smaller `brk()`-backed allocations would otherwise have used, with
   no way to trade space back.
 
-## BMFS file I/O (`bmfs.c`)
+## ext4 file I/O (`ext4.c`)
 
-- **Flat namespace only — no subdirectories.** Paths are just a
-  filename with at most one leading `/` stripped; anything with an
-  embedded `/` is rejected with `-ENOENT`.
-- **Fixed 2MiB reservation per file, set at creation, never grown.**
-  Writing past a file's `reserved_blocks` capacity fails with
-  `-ENOSPC` even if the disk has free space elsewhere — there's no
-  mechanism to extend an existing file's allocation.
-- **Directory table changes only flush to disk on `close()`.** If a
-  program exits (or the VM shuts down) without closing a modified fd,
-  the new size / new directory entry is lost even though data blocks
-  may have already been written.
-- **No timestamps.** `bmfs_fstat_fd()`/`bmfs_fstatat()` always report
-  zeroed atime/mtime/ctime — no clock source is wired into file
-  metadata (unlike TCP/heap code, which do use
-  `b_system(TIMECOUNTER)`).
-- **No `access()`/`chmod()`/permission bits.** Every file reports mode
-  `0644` regardless of anything; there's no enforcement either way.
+This is a from-scratch, minimal ext4 implementation, not a general-
+purpose one — it supports exactly the read/write/create/grow/delete
+operations `posix_shim.c` needs against a single flat directory, and
+requires filesystem images built with a constrained feature set (see
+the file-level comment in `ext4.c` for the exact `mkfs.ext4` flags:
+4096-byte blocks, 256-byte inodes, `64bit`/`metadata_csum`/`meta_bg`
+disabled). Verified against real `e2fsprogs` tooling (`e2fsck -f`,
+`debugfs`) — see SUMMARY.md — but still a much smaller surface than a
+real ext4 driver:
+
+- **Flat namespace only — no subdirectories.** Paths are looked up
+  directly in the root directory (inode 2); anything with an embedded
+  `/` is rejected with `-ENOENT`. ext4 itself supports real
+  subdirectories, but nothing above this layer needs them yet.
+- **Directory entries are only ever scanned/inserted linearly.**
+  htree-indexed directories are still read correctly (see the comment
+  in `ext4.c` on why a linear scan is safe there), but this driver
+  never builds an htree itself, and clears a directory's htree flag
+  the first time it inserts into it — a directory this driver
+  modifies stays linear-only from then on.
+- **Extent trees are only ever grown to depth 1** — up to 4 in-inode
+  extents, or up to 4 index entries each pointing to one 4096-byte
+  leaf block of up to ~340 extents. No depth-2+ trees. A hard cap,
+  though a generous one for this environment's expected file sizes.
+- **Deleted directory slots (tombstones) are reused whole, never
+  split**, even when much larger than the new entry being inserted —
+  minor directory-space waste, not a correctness issue.
+- **No journal replay, no checksums.** Every operation is expected to
+  complete without a crash partway through, same limitation BMFS had
+  before it. `metadata_csum`/`uninit_bg` must be disabled at
+  `mkfs.ext4` time — this driver doesn't compute or verify them.
+- **No `access()`/`chmod()`/permission bits beyond mode bits already
+  on disk.** `ext4_fstat_fd()` always reports `0644` regardless.
 - **No directory listing.** `opendir`/`readdir`-equivalent enumeration
   of what's on disk isn't implemented — only look-up-by-name.
-- **Small fixed open-file table** (`BMFS_MAX_OPEN` = 8 concurrent
-  files across the whole process).
+- **Small fixed open-file table** (`EXT4_MAX_OPEN` = 8 concurrent files
+  across the whole process) and **fixed max image size** (128 block
+  groups × 128MiB = 16GiB, from `EXT4_MAX_GROUPS`).
 
 ## Networking (`net_glue.c`, `net_shim.c`)
 

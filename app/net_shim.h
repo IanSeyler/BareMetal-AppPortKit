@@ -5,7 +5,7 @@
 #include <sys/socket.h>
 
 // True if fd refers to an open socket (as opposed to a std fd 0-2 or
-// a BMFS fd -- see bmfs.h).
+// an ext4 fd -- see ext4.h).
 int net_shim_is_fd(long fd);
 
 long net_shim_socket(long domain, long type, long protocol);

@@ -42,7 +42,7 @@ make -C "$MUSL_DIR" install-headers DESTDIR="$(pwd)/$MUSL_DIR/sysroot"
 
 gcc $CFLAGS -o crt0.o crt0.c
 gcc $CFLAGS -o posix_shim.o posix_shim.c
-gcc $CFLAGS -o bmfs.o bmfs.c
+gcc $CFLAGS -o ext4.o ext4.c
 gcc $LWIP_CFLAGS -o net_glue.o net_glue.c
 gcc $LWIP_CFLAGS -o net_shim.o net_shim.c
 gcc $CFLAGS -o libBareMetal.o libBareMetal.c
@@ -68,13 +68,13 @@ for src in $LWIP_SRCS; do
 	LWIP_OBJS="$LWIP_OBJS $obj"
 done
 
-ld -T c.ld -o helloc.app crt0.o posix_shim.o bmfs.o net_glue.o net_shim.o \
+ld -T c.ld -o helloc.app crt0.o posix_shim.o ext4.o net_glue.o net_shim.o \
 	libBareMetal.o helloc.o $LWIP_OBJS "$MUSL_LIB"
 
-ld -T c.ld -o webc.app crt0.o posix_shim.o bmfs.o net_glue.o net_shim.o \
+ld -T c.ld -o webc.app crt0.o posix_shim.o ext4.o net_glue.o net_shim.o \
 	libBareMetal.o webc.o $LWIP_OBJS "$MUSL_LIB"
 
-ld -T c.ld -o timetest.app crt0.o posix_shim.o bmfs.o net_glue.o net_shim.o \
+ld -T c.ld -o timetest.app crt0.o posix_shim.o ext4.o net_glue.o net_shim.o \
 	libBareMetal.o timetest.o $LWIP_OBJS "$MUSL_LIB"
 
 cp helloc.app webc.app ../

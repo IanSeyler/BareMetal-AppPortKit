@@ -48,6 +48,7 @@ gcc $LWIP_CFLAGS -o net_shim.o net_shim.c
 gcc $CFLAGS -o libBareMetal.o libBareMetal.c
 gcc $CFLAGS -o helloc.o helloc.c
 gcc $CFLAGS -o webc.o webc.c
+gcc $CFLAGS -o timetest.o timetest.c
 
 # lwIP core: IPv4 + Ethernet + ARP + DHCP + TCP (+ UDP, which DHCP
 # needs internally) only -- no IPv6, no AutoIP/IGMP/raw sockets/ACD
@@ -72,6 +73,9 @@ ld -T c.ld -o helloc.app crt0.o posix_shim.o bmfs.o net_glue.o net_shim.o \
 
 ld -T c.ld -o webc.app crt0.o posix_shim.o bmfs.o net_glue.o net_shim.o \
 	libBareMetal.o webc.o $LWIP_OBJS "$MUSL_LIB"
+
+ld -T c.ld -o timetest.app crt0.o posix_shim.o bmfs.o net_glue.o net_shim.o \
+	libBareMetal.o timetest.o $LWIP_OBJS "$MUSL_LIB"
 
 cp helloc.app webc.app ../
 cd ..
